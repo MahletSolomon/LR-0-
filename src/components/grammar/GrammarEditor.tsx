@@ -1,199 +1,402 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { v4 as uuidv4 } from "uuid";
-import { ProductionRow } from "./ProductionRow";
-import { buildGrammarFromRows, GrammarRow, GrammarBuildResult } from "@/lib/grammar-utils";
-import { buildLR0Automaton, LR0BuildResult } from "@/core/lr0/canonical";
-import { buildLR0ParseTable } from "@/core/lr0/buildTable";
-import { itemToString } from "@/core/lr0/items";
-import { Button } from "@/components/ui/button";
-import { ParseTableView } from "./ParseTableView";
-import { ConflictsPanel } from "./ConflictsPanel";
-import { ParseTrace } from "./ParseTrace";
-import { Plus, AlertTriangle, CheckCircle } from "lucide-react";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
+import { Plus, AlertTriangle, CheckCircle, Play } from "lucide-react";
 
+// Components
+import { ProductionRow } from "./ProductionRow";
+import { Button } from "@/components/ui/button";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+
+// Compiler Logic (My Lib)
+import { getTokens, Grammar, Production, GrammarRow } from "@/lib/compiler/grammar";
+import { buildAutomaton, buildTable, formatItem, ParseTable, LR0State, AugmentedGrammar } from "@/lib/compiler/lr0";
+import { parse } from "@/lib/compiler/parser";
+
+// Local types no longer needed
+// export interface GrammarRow {
+//     id: string;
+//     left: string;
+//     right: string[];
+//     hasEpsilon: boolean;
+// }
 
 export function GrammarEditor() {
+    // --- State ---
     const [rows, setRows] = useState<GrammarRow[]>([
         { id: uuidv4(), left: "S", right: ["E"], hasEpsilon: false },
         { id: uuidv4(), left: "E", right: ["T", "E + T"], hasEpsilon: false },
+        { id: uuidv4(), left: "T", right: ["id"], hasEpsilon: false },
     ]);
 
-    const [buildResult, setBuildResult] = useState<GrammarBuildResult>({ errors: [] });
+    const [grammar, setGrammar] = useState<Grammar | null>(null);
+    const [error, setError] = useState<string | null>(null);
 
-    // Validate on change
+    // Parse Sim State
+    const [testInput, setTestInput] = useState("id + id");
+    const [simResult, setSimResult] = useState<any>(null);
+
+    // --- Effects ---
+
+    // validate and build grammar object whenever rows change
     useEffect(() => {
-        const result = buildGrammarFromRows(rows);
-        setBuildResult(result);
+        try {
+            const built = buildGrammar(rows);
+            setGrammar(built);
+            setError(null);
+        } catch (err: any) {
+            setGrammar(null);
+            setError(err.message);
+        }
     }, [rows]);
 
-    const addRow = () => {
-        setRows([
-            ...rows,
-            { id: uuidv4(), left: "", right: [""], hasEpsilon: false },
-        ]);
+
+    // --- Helpers ---
+
+    // Converts UI rows to Grammar object
+    // Throws string on error
+    const buildGrammar = (rows: GrammarRow[]): Grammar => {
+        const productions: Production[] = [];
+        let pid = 1;
+        const nonTerminals = new Set<string>();
+        const terminals = new Set<string>();
+
+        if (rows.length === 0) throw new Error("Grammar is empty");
+
+        // First pass: collect LHS
+        rows.forEach(r => {
+            const lhs = r.left.trim();
+            if (!lhs) throw new Error("LHS cannot be empty");
+            if (/\s/.test(lhs)) throw new Error(`Invalid LHS '${lhs}' (no spaces)`);
+            if (nonTerminals.has(lhs)) throw new Error(`Duplicate LHS '${lhs}'`);
+            nonTerminals.add(lhs);
+        });
+
+        const startSymbol = rows[0].left.trim();
+
+        // Second pass: build productions
+        rows.forEach(r => {
+            const lhs = r.left.trim();
+
+            if (r.hasEpsilon) {
+                productions.push({
+                    id: pid++,
+                    left: lhs,
+                    right: [],
+                    raw: `${lhs} -> ε`
+                });
+            }
+
+            r.right.forEach(alt => {
+                const str = alt.trim();
+                if (!str) return;
+
+                const tokens = getTokens(str);
+                // Find terminals
+                tokens.forEach(t => {
+                    if (!nonTerminals.has(t)) terminals.add(t);
+                });
+
+                productions.push({
+                    id: pid++,
+                    left: lhs,
+                    right: tokens,
+                    raw: `${lhs} -> ${str}`
+                });
+            });
+        });
+
+        return {
+            startSymbol,
+            nonTerminals,
+            terminals,
+            productions
+        };
     };
 
-    const updateRow = (id: string, updates: Partial<GrammarRow>) => {
-        setRows(rows.map((row) => (row.id === id ? { ...row, ...updates } : row)));
+    // --- Handlers ---
+
+    const addRow = () => {
+        setRows([...rows, { id: uuidv4(), left: "", right: [""], hasEpsilon: false }]);
+    };
+
+    const updateRow = (id: string, diff: Partial<GrammarRow>) => {
+        setRows(rows.map(r => r.id === id ? { ...r, ...diff } : r));
     };
 
     const deleteRow = (id: string) => {
-        setRows(rows.filter((row) => row.id !== id));
+        setRows(rows.filter(r => r.id !== id));
     };
 
-    const isValid = buildResult.errors.length === 0 && !!buildResult.grammar;
+    const runSimulation = (automatonData: any) => {
+        if (!automatonData || !automatonData.table) return;
+        // simple tokenize for simulator
+        const tokens = getTokens(testInput);
+        const result = parse(automatonData.grammar, automatonData.table, tokens);
+        setSimResult(result);
+    };
+
+    // --- Render ---
+
+    // Computed results (memo-ish)
+    let automatonResult = null;
+    if (grammar && !error) {
+        const { grammar: aug, states, transitions } = buildAutomaton(grammar);
+        const table = buildTable(aug, states, transitions);
+        automatonResult = { grammar: aug, states, transitions, table };
+    }
 
     return (
-        <div className="space-y-6 max-w-5xl mx-auto">
-            <div className="flex flex-col gap-4">
-                <h1 className="text-3xl font-bold tracking-tight">Grammar Editor</h1>
-                <p className="text-muted-foreground">
-                    Define your grammar below. The first row's LHS is the start symbol. Use valid identifiers (letters, numbers, underscores).
+        <div className="max-w-5xl mx-auto space-y-8 p-4">
+
+            {/* Header */}
+            <div>
+                <h1 className="text-3xl font-bold">Compiler Design Lab: LR(0) Parser</h1>
+                <p className="text-muted-foreground mt-2">
+                    Build a grammar, generate the LR(0) automaton, and verify it against conflicts.
                 </p>
             </div>
 
-            {!isValid && buildResult.errors.length > 0 && (
-                <Alert variant="destructive">
-                    <AlertTriangle className="h-4 w-4" />
-                    <AlertTitle>Grammar Invalid</AlertTitle>
-                    <AlertDescription>
-                        Please fix the highlighted errors to proceed.
-                        {buildResult.errors.some(e => e.message.includes("Duplicate LHS")) && (
-                            <div className="mt-1 font-medium">• Remove duplicate LHS definitions.</div>
-                        )}
-                        {buildResult.errors.some(e => e.message.includes("LHS cannot be empty")) && (
-                            <div className="mt-1 font-medium">• Ensure all rows have a Left-Hand Side symbol.</div>
-                        )}
-                    </AlertDescription>
-                </Alert>
-            )}
-
-            {isValid && (
-                <Alert className="border-green-500/50 bg-green-500/10 text-green-700 dark:text-green-300">
-                    <CheckCircle className="h-4 w-4" />
-                    <AlertTitle>Grammar Valid</AlertTitle>
-                    <AlertDescription>
-                        Ready for parsing generation.
-                        <span className="font-mono text-xs ml-2">
-                            ({buildResult.grammar?.nonTerminals.size} Non-Terminals, {buildResult.grammar?.terminals.size} Terminals)
-                        </span>
-                    </AlertDescription>
-                </Alert>
-            )}
-
-            <div className="space-y-4">
-                {rows.map((row, index) => (
-                    <ProductionRow
-                        key={row.id}
-                        row={row}
-                        index={index}
-                        errors={buildResult.errors}
-                        onChange={updateRow}
-                        onDelete={deleteRow}
-                    />
-                ))}
-
-                <Button onClick={addRow} className="w-full border-dashed" variant="outline">
-                    <Plus className="mr-2 h-4 w-4" /> Add Production Row
-                </Button>
-            </div>
-
-            {isValid && (
-                <div className="space-y-4 mt-8">
-                    <div className="flex items-center justify-between">
-                        <h2 className="text-xl font-semibold">LR(0) Automaton</h2>
-                    </div>
-
-                    <AutomatonPreview grammar={buildResult.grammar!} />
-                </div>
-            )}
-        </div>
-    );
-}
-
-function AutomatonPreview({ grammar }: { grammar: import("@/type/grammar").Grammar }) {
-    const [result, setResult] = useState<LR0BuildResult | null>(null);
-    const [tableResult, setTableResult] = useState<import("@/core/lr0/tableTypes").LR0ParseTable | null>(null);
-
-    const handleBuild = () => {
-        const res = buildLR0Automaton(grammar);
-        setResult(res);
-        if (res.automaton) {
-            const table = buildLR0ParseTable(res.automaton);
-            setTableResult(table);
-        } else {
-            setTableResult(null);
-        }
-    };
-
-    return (
-        <div className="space-y-8">
+            {/* Editor Area */}
             <Card>
                 <CardHeader>
-                    <CardTitle className="text-base flex justify-between items-center">
-                        <span>Generated Automaton</span>
-                        <Button onClick={handleBuild} size="sm">Build LR(0) Items & Table</Button>
-                    </CardTitle>
-                    <CardDescription>
-                        Canonical collection of LR(0) states and Parse Table.
-                    </CardDescription>
+                    <CardTitle>Grammar Definition</CardTitle>
+                    <CardDescription>Start symbol is the first row.</CardDescription>
                 </CardHeader>
-                <CardContent>
-                    {!result && <div className="text-sm text-muted-foreground">Click build to generate states.</div>}
+                <CardContent className="space-y-4">
 
-                    {result?.errors.length ? (
-                        <div className="text-destructive text-sm font-medium">
-                            Errors: {result.errors.join(", ")}
-                        </div>
-                    ) : null}
+                    {error && (
+                        <Alert variant="destructive">
+                            <AlertTriangle className="w-4 h-4" />
+                            <AlertTitle>Invalid Grammar</AlertTitle>
+                            <AlertDescription>{error}</AlertDescription>
+                        </Alert>
+                    )}
 
-                    {result?.automaton && (
-                        <div className="space-y-4">
-                            <div className="flex gap-4 text-sm font-medium">
-                                <div className="px-2 py-1 bg-muted rounded">States: {result.automaton.states.length}</div>
-                                <div className="px-2 py-1 bg-muted rounded">Transitions: {result.automaton.transitions.length}</div>
-                            </div>
+                    {!error && grammar && (
+                        <Alert className="bg-green-50 text-green-700 border-green-200">
+                            <CheckCircle className="w-4 h-4" />
+                            <AlertTitle>Valid Grammar</AlertTitle>
+                            <AlertDescription>
+                                {grammar.nonTerminals.size} Non-Terminals, {grammar.terminals.size} Terminals
+                            </AlertDescription>
+                        </Alert>
+                    )}
 
-                            <div className="max-h-[300px] overflow-y-auto space-y-2 border rounded-md p-2">
-                                {result.automaton.states.map(state => (
-                                    <div key={state.id} className="text-xs font-mono p-2 border-b last:border-0 hover:bg-muted/50">
-                                        <div className="font-bold text-primary mb-1">{state.id}</div>
-                                        <div className="pl-2 border-l-2 border-muted-foreground/20 space-y-0.5">
-                                            {state.items.map(item => (
-                                                <div key={`${item.prodId}-${item.dot}`}>
-                                                    {itemToString(result.automaton!.grammar, item)}
-                                                </div>
-                                            ))}
+                    <div className="space-y-4">
+                        {rows.map((row, i) => (
+                            <ProductionRow
+                                key={row.id}
+                                row={row}
+                                index={i}
+                                errors={[]} // Todo: pass detailed validation errors
+                                onChange={updateRow}
+                                onDelete={deleteRow}
+                            />
+                        ))}
+                    </div>
+
+                    <Button variant="outline" className="w-full border-dashed" onClick={addRow}>
+                        <Plus className="mr-2 w-4 h-4" /> Add Production
+                    </Button>
+
+                </CardContent>
+            </Card>
+
+            {/* Automaton & Table Output */}
+            {automatonResult && (
+                <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+
+                    {/* LR0 Automaton View */}
+                    <Card>
+                        <CardHeader>
+                            <CardTitle>LR(0) Automaton</CardTitle>
+                            <CardDescription>Canonical collection of states ({automatonResult.states.length})</CardDescription>
+                        </CardHeader>
+                        <CardContent>
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-h-[500px] overflow-y-auto">
+                                {automatonResult.states.map(state => (
+                                    <div key={state.id} className="border rounded p-3 text-xs bg-muted/30 hover:bg-muted transition-colors">
+                                        <div className="font-bold border-b pb-1 mb-2 flex justify-between">
+                                            <span>{state.id}</span>
+                                            {/* Transitions from this state */}
+                                            <div className="flex gap-1">
+                                                {automatonResult?.transitions
+                                                    .filter(t => t.from === state.id)
+                                                    .map(t => (
+                                                        <Badge key={t.symbol + t.to} variant="outline" className="text-[10px] h-4 px-1 py-0">
+                                                            {t.symbol}→{t.to}
+                                                        </Badge>
+                                                    ))}
+                                            </div>
                                         </div>
-                                        <div className="mt-1 pl-2 text-muted-foreground">
-                                            Transitions: {result.automaton!.transitions.filter(t => t.fromId === state.id).map(t => `${t.symbol} -> ${t.toId}`).join(", ") || "None"}
+                                        <div className="space-y-1 font-mono text-muted-foreground">
+                                            {state.items.map((item, idx) => (
+                                                <div key={idx}>{formatItem(automatonResult?.grammar!, item)}</div>
+                                            ))}
                                         </div>
                                     </div>
                                 ))}
                             </div>
+                        </CardContent>
+                    </Card>
+
+                    {/* Parse Table & Conflicts */}
+                    <div className="grid md:grid-cols-3 gap-6">
+                        <div className="md:col-span-2">
+                            <ParseTableView
+                                table={automatonResult.table}
+                                terminals={[...Array.from(automatonResult.grammar.terminals), "$"]}
+                                nonTerminals={[...Array.from(automatonResult.grammar.nonTerminals)].filter(n => n !== automatonResult!.grammar.startPrime)}
+                                states={automatonResult.states.map(s => s.id)}
+                            />
                         </div>
+
+                        {/* Simulator Panel (Right Side) */}
+                        <div>
+                            <Card className="h-full">
+                                <CardHeader>
+                                    <CardTitle>Simulate Parse</CardTitle>
+                                </CardHeader>
+                                <CardContent className="space-y-4">
+                                    <div className="flex gap-2">
+                                        <Input
+                                            value={testInput}
+                                            onChange={e => setTestInput(e.target.value)}
+                                            placeholder="Tokens (e.g. id + id)"
+                                        />
+                                        <Button size="icon" onClick={() => runSimulation(automatonResult)}>
+                                            <Play className="w-4 h-4" />
+                                        </Button>
+                                    </div>
+
+                                    {automatonResult.table.conflicts.length > 0 && (
+                                        <Alert variant="destructive" className="py-2">
+                                            <AlertTriangle className="w-3 h-3" />
+                                            <AlertDescription className="text-xs ml-2">
+                                                Warning: Grammar has conflicts! Simulation might fail or use defaults.
+                                            </AlertDescription>
+                                        </Alert>
+                                    )}
+
+                                    {simResult && (
+                                        <div className="border rounded-md p-2 bg-muted/50 text-xs font-mono h-[300px] overflow-y-auto">
+                                            {simResult.status === "error" && (
+                                                <div className="text-red-500 font-bold mb-2">Error: {simResult.errorMsg}</div>
+                                            )}
+                                            {simResult.status === "accepted" && (
+                                                <div className="text-green-600 font-bold mb-2">Accepted!</div>
+                                            )}
+
+                                            <table className="w-full text-left opacity-90">
+                                                <thead>
+                                                    <tr className="border-b">
+                                                        <th className="pb-1">Step</th>
+                                                        <th className="pb-1">Stack</th>
+                                                        <th className="pb-1">Action</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {simResult.steps.map((step: any) => (
+                                                        <tr key={step.id}>
+                                                            <td className="align-top py-1 pr-2 text-muted-foreground">{step.id}</td>
+                                                            <td className="align-top py-1 pr-2 break-all">{step.stack.join(" ")}</td>
+                                                            <td className="align-top py-1 text-blue-600">{step.action}</td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    )}
+                                </CardContent>
+                            </Card>
+                        </div>
+                    </div>
+
+                    {/* Conflicts List */}
+                    {automatonResult.table.conflicts.length > 0 && (
+                        <Card className="border-destructive/50 bg-destructive/5">
+                            <CardHeader>
+                                <CardTitle className="text-destructive flex items-center gap-2">
+                                    <AlertTriangle /> Conflicts Detected ({automatonResult.table.conflicts.length})
+                                </CardTitle>
+                            </CardHeader>
+                            <CardContent>
+                                <ul className="list-disc pl-5 space-y-1 text-sm">
+                                    {automatonResult.table.conflicts.map((c, i) => (
+                                        <li key={i}>
+                                            <span className="font-bold">{c.stateId}</span> on symbol <span className="font-mono bg-background px-1 rounded">{c.symbol}</span>: {c.msg}
+                                        </li>
+                                    ))}
+                                </ul>
+                            </CardContent>
+                        </Card>
                     )}
-                </CardContent>
-            </Card>
 
-            {tableResult && result?.automaton && (
-                <div className="space-y-8">
-                    <div className="space-y-4">
-                        <h3 className="text-lg font-semibold">Parse Table & Conflicts</h3>
-                        <ConflictsPanel table={tableResult} />
-                        <ParseTableView table={tableResult} grammar={result.automaton.grammar} states={result.automaton.states} />
-                    </div>
-
-                    <div className="space-y-4">
-                        <h3 className="text-lg font-semibold">Simulation</h3>
-                        <ParseTrace table={tableResult} automaton={result.automaton} />
-                    </div>
                 </div>
             )}
+
         </div>
+    );
+}
+
+// Simple Table Component (Inline for "Student" simplicity)
+function ParseTableView({ table, terminals, nonTerminals, states }: any) {
+    const allCols = [...terminals, ...nonTerminals];
+
+    return (
+        <Card className="h-full overflow-hidden flex flex-col">
+            <CardHeader>
+                <CardTitle>Parse Table</CardTitle>
+            </CardHeader>
+            <CardContent className="flex-1 overflow-auto p-0">
+                <table className="w-full text-center text-xs border-collapse">
+                    <thead className="bg-muted sticky top-0">
+                        <tr>
+                            <th className="p-2 border-b border-r bg-muted">State</th>
+                            {allCols.map(c => (
+                                <th key={c} className={`p-2 border-b min-w-[40px] ${terminals.includes(c) ? 'font-bold' : 'text-muted-foreground italic'}`}>
+                                    {c}
+                                </th>
+                            ))}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {states.map((s: string) => (
+                            <tr key={s} className="hover:bg-muted/30">
+                                <td className="p-2 border-r font-mono bg-muted/20">{s}</td>
+                                {allCols.map(c => {
+                                    const isTerm = terminals.includes(c);
+                                    let cell = "";
+                                    let style = "";
+
+                                    if (isTerm) {
+                                        const act = table.actions.get(s)?.get(c);
+                                        if (act) {
+                                            if (act.type === 'shift') { cell = `s${act.toState?.substring(1)}`; style = "text-blue-600"; }
+                                            if (act.type === 'reduce') { cell = `r${act.prodId}`; style = "text-orange-600"; }
+                                            if (act.type === 'accept') { cell = "acc"; style = "font-bold text-green-600"; }
+                                        }
+                                    } else {
+                                        const goto = table.goto.get(s)?.get(c);
+                                        if (goto) { cell = goto.substring(1); style = "text-muted-foreground"; }
+                                    }
+
+                                    return (
+                                        <td key={c} className={`border-b border-r last:border-r-0 p-1 ${style}`}>
+                                            {cell}
+                                        </td>
+                                    );
+                                })}
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </CardContent>
+        </Card>
     );
 }

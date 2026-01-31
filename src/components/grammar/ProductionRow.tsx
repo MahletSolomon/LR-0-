@@ -4,7 +4,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 
 import { X, Trash2, ArrowRight } from "lucide-react";
-import { GrammarRow, BuildError } from "@/lib/grammar-utils";
+import { GrammarRow, BuildError } from "@/lib/compiler/grammar";
 import React, { useRef } from "react";
 import { cn } from "@/lib/utils";
 
