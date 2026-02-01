@@ -8,6 +8,11 @@ export interface ParseStep {
     action: string;
 }
 
+export interface ParseNode {
+    label: string;
+    children?: ParseNode[];
+}
+
 export function parse(
     grammar: AugmentedGrammar,
     table: ParseTable,
@@ -18,7 +23,9 @@ export function parse(
     // We manage the stack as array of state IDs
     const stack = ["S0"];
     // Also keep symbols for visual trace
-    const symbolStack: string[] = []; // aligned with stack (offset by 1?)
+    const symbolStack: string[] = [];
+    // Tree construction stack
+    const nodeStack: ParseNode[] = [];
 
     // Input buffer
     const buffer = [...inputTokens, "$"];
@@ -26,6 +33,7 @@ export function parse(
     let stepCounter = 1;
     let status: "accepted" | "error" | "running" = "running";
     let errorMsg = "";
+    let tree: ParseNode | null = null;
 
     while (status === "running") {
         // Safety break
@@ -41,7 +49,6 @@ export function parse(
         // Record step
         steps.push({
             id: stepCounter++,
-            // Format stack nicely: S0 E S1 + S4
             stack: stack.map((s, i) => (i === 0 ? s : `${symbolStack[i - 1]} ${s}`)),
             input: [...buffer],
             action: "" // fill below
@@ -65,6 +72,10 @@ export function parse(
             currentStep.action = `Shift ${action.toState}`;
             stack.push(action.toState!);
             symbolStack.push(currentToken);
+
+            // Tree: Push leaf
+            nodeStack.push({ label: currentToken });
+
             buffer.shift(); // consume input
 
         } else if (action.type === "reduce") {
@@ -73,11 +84,18 @@ export function parse(
             currentStep.action = `Reduce ${prod.raw}`;
 
             const popSize = prod.right.length;
+            const children: ParseNode[] = [];
 
             // Pop states and symbols
+            // We pop in reverse order for the stack, but children should be in order
             for (let i = 0; i < popSize; i++) {
                 stack.pop();
                 symbolStack.pop();
+            }
+
+            // Pop nodes for tree
+            for (let i = 0; i < popSize; i++) {
+                children.unshift(nodeStack.pop()!);
             }
 
             // Top state is now t
@@ -96,11 +114,19 @@ export function parse(
             symbolStack.push(prod.left);
             stack.push(gotoState);
 
+            // Tree: Push new subtree
+            nodeStack.push({ label: prod.left, children });
+
         } else if (action.type === "accept") {
             currentStep.action = "Accept";
             status = "accepted";
+            tree = nodeStack[0] || null;
+            // Unpack S' if it exists (usually we want the real start symbol)
+            if (tree && tree.children && tree.children.length === 1) {
+                tree = tree.children[0];
+            }
         }
     }
 
-    return { steps, status, errorMsg };
+    return { steps, status, errorMsg, tree };
 }

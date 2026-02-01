@@ -6,16 +6,19 @@ import { Plus, AlertTriangle, CheckCircle, Play } from "lucide-react";
 
 // Components
 import { ProductionRow } from "./ProductionRow";
+import { AutomatonGraph } from "./AutomatonGraph";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 // Compiler Logic (My Lib)
 import { getTokens, Grammar, Production, GrammarRow } from "@/lib/compiler/grammar";
 import { buildAutomaton, buildTable, formatItem, ParseTable, LR0State, AugmentedGrammar } from "@/lib/compiler/lr0";
 import { parse } from "@/lib/compiler/parser";
+import { ParseTrace } from "./ParseTrace";
 
 // Local types no longer needed
 // export interface GrammarRow {
@@ -211,43 +214,63 @@ export function GrammarEditor() {
             {automatonResult && (
                 <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
 
-                    {/* LR0 Automaton View */}
-                    <Card>
-                        <CardHeader>
-                            <CardTitle>LR(0) Automaton</CardTitle>
-                            <CardDescription>Canonical collection of states ({automatonResult.states.length})</CardDescription>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-h-[500px] overflow-y-auto">
-                                {automatonResult.states.map(state => (
-                                    <div key={state.id} className="border rounded p-3 text-xs bg-muted/30 hover:bg-muted transition-colors">
-                                        <div className="font-bold border-b pb-1 mb-2 flex justify-between">
-                                            <span>{state.id}</span>
-                                            {/* Transitions from this state */}
-                                            <div className="flex gap-1">
-                                                {automatonResult?.transitions
-                                                    .filter(t => t.from === state.id)
-                                                    .map(t => (
-                                                        <Badge key={t.symbol + t.to} variant="outline" className="text-[10px] h-4 px-1 py-0">
-                                                            {t.symbol}→{t.to}
-                                                        </Badge>
+                    {/* LR0 Automaton View (Tabs) */}
+                    <Tabs defaultValue="graph" className="w-full">
+                        <div className="flex items-center justify-between mb-2">
+                            <h2 className="text-lg font-semibold">Automaton States</h2>
+                            <TabsList>
+                                <TabsTrigger value="list">List View</TabsTrigger>
+                                <TabsTrigger value="graph">Graph View</TabsTrigger>
+                            </TabsList>
+                        </div>
+
+                        <TabsContent value="list">
+                            <Card>
+                                <CardHeader>
+                                    <CardTitle>LR(0) Automaton Items</CardTitle>
+                                    <CardDescription>Canonical collection of states ({automatonResult.states.length})</CardDescription>
+                                </CardHeader>
+                                <CardContent>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-h-[500px] overflow-y-auto">
+                                        {automatonResult.states.map(state => (
+                                            <div key={state.id} className="border rounded p-3 text-xs bg-muted/30 hover:bg-muted transition-colors">
+                                                <div className="font-bold border-b pb-1 mb-2 flex justify-between">
+                                                    <span>{state.id}</span>
+                                                    {/* Transitions from this state */}
+                                                    <div className="flex gap-1">
+                                                        {automatonResult?.transitions
+                                                            .filter(t => t.from === state.id)
+                                                            .map(t => (
+                                                                <Badge key={t.symbol + t.to} variant="outline" className="text-[10px] h-4 px-1 py-0">
+                                                                    {t.symbol}→{t.to}
+                                                                </Badge>
+                                                            ))}
+                                                    </div>
+                                                </div>
+                                                <div className="space-y-1 font-mono text-muted-foreground">
+                                                    {state.items.map((item, idx) => (
+                                                        <div key={idx}>{formatItem(automatonResult?.grammar!, item)}</div>
                                                     ))}
+                                                </div>
                                             </div>
-                                        </div>
-                                        <div className="space-y-1 font-mono text-muted-foreground">
-                                            {state.items.map((item, idx) => (
-                                                <div key={idx}>{formatItem(automatonResult?.grammar!, item)}</div>
-                                            ))}
-                                        </div>
+                                        ))}
                                     </div>
-                                ))}
-                            </div>
-                        </CardContent>
-                    </Card>
+                                </CardContent>
+                            </Card>
+                        </TabsContent>
+
+                        <TabsContent value="graph" className="h-[600px]">
+                            <AutomatonGraph
+                                grammar={automatonResult.grammar}
+                                states={automatonResult.states}
+                                transitions={automatonResult.transitions}
+                            />
+                        </TabsContent>
+                    </Tabs>
 
                     {/* Parse Table & Conflicts */}
-                    <div className="grid md:grid-cols-3 gap-6">
-                        <div className="md:col-span-2">
+                    <div className="flex flex-col space-y-8">
+                        <div>
                             <ParseTableView
                                 table={automatonResult.table}
                                 terminals={[...Array.from(automatonResult.grammar.terminals), "$"]}
@@ -256,7 +279,7 @@ export function GrammarEditor() {
                             />
                         </div>
 
-                        {/* Simulator Panel (Right Side) */}
+                        {/* Simulator Panel (Bottom) */}
                         <div>
                             <Card className="h-full">
                                 <CardHeader>
@@ -284,33 +307,38 @@ export function GrammarEditor() {
                                     )}
 
                                     {simResult && (
-                                        <div className="border rounded-md p-2 bg-muted/50 text-xs font-mono h-[300px] overflow-y-auto">
-                                            {simResult.status === "error" && (
-                                                <div className="text-red-500 font-bold mb-2">Error: {simResult.errorMsg}</div>
-                                            )}
-                                            {simResult.status === "accepted" && (
-                                                <div className="text-green-600 font-bold mb-2">Accepted!</div>
-                                            )}
+                                        <>
+                                            <div className="border rounded-md p-2 bg-muted/50 text-xs font-mono h-[300px] overflow-y-auto">
+                                                {simResult.status === "error" && (
+                                                    <div className="text-red-500 font-bold mb-2">Error: {simResult.errorMsg}</div>
+                                                )}
+                                                {simResult.status === "accepted" && (
+                                                    <div className="text-green-600 font-bold mb-2">Accepted!</div>
+                                                )}
 
-                                            <table className="w-full text-left opacity-90">
-                                                <thead>
-                                                    <tr className="border-b">
-                                                        <th className="pb-1">Step</th>
-                                                        <th className="pb-1">Stack</th>
-                                                        <th className="pb-1">Action</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody>
-                                                    {simResult.steps.map((step: any) => (
-                                                        <tr key={step.id}>
-                                                            <td className="align-top py-1 pr-2 text-muted-foreground">{step.id}</td>
-                                                            <td className="align-top py-1 pr-2 break-all">{step.stack.join(" ")}</td>
-                                                            <td className="align-top py-1 text-blue-600">{step.action}</td>
+                                                <table className="w-full text-left opacity-90">
+                                                    <thead>
+                                                        <tr className="border-b">
+                                                            <th className="pb-1">Step</th>
+                                                            <th className="pb-1">Stack</th>
+                                                            <th className="pb-1">Action</th>
                                                         </tr>
-                                                    ))}
-                                                </tbody>
-                                            </table>
-                                        </div>
+                                                    </thead>
+                                                    <tbody>
+                                                        {simResult.steps.map((step: any) => (
+                                                            <tr key={step.id}>
+                                                                <td className="align-top py-1 pr-2 text-muted-foreground">{step.id}</td>
+                                                                <td className="align-top py-1 pr-2 break-all">{step.stack.join(" ")}</td>
+                                                                <td className="align-top py-1 text-blue-600">{step.action}</td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+
+                                            {/* Render Tree if complete */}
+                                            {simResult.tree && <ParseTrace node={simResult.tree} />}
+                                        </>
                                     )}
                                 </CardContent>
                             </Card>
@@ -318,29 +346,31 @@ export function GrammarEditor() {
                     </div>
 
                     {/* Conflicts List */}
-                    {automatonResult.table.conflicts.length > 0 && (
-                        <Card className="border-destructive/50 bg-destructive/5">
-                            <CardHeader>
-                                <CardTitle className="text-destructive flex items-center gap-2">
-                                    <AlertTriangle /> Conflicts Detected ({automatonResult.table.conflicts.length})
-                                </CardTitle>
-                            </CardHeader>
-                            <CardContent>
-                                <ul className="list-disc pl-5 space-y-1 text-sm">
-                                    {automatonResult.table.conflicts.map((c, i) => (
-                                        <li key={i}>
-                                            <span className="font-bold">{c.stateId}</span> on symbol <span className="font-mono bg-background px-1 rounded">{c.symbol}</span>: {c.msg}
-                                        </li>
-                                    ))}
-                                </ul>
-                            </CardContent>
-                        </Card>
-                    )}
+                    {
+                        automatonResult.table.conflicts.length > 0 && (
+                            <Card className="border-destructive/50 bg-destructive/5">
+                                <CardHeader>
+                                    <CardTitle className="text-destructive flex items-center gap-2">
+                                        <AlertTriangle /> Conflicts Detected ({automatonResult.table.conflicts.length})
+                                    </CardTitle>
+                                </CardHeader>
+                                <CardContent>
+                                    <ul className="list-disc pl-5 space-y-1 text-sm">
+                                        {automatonResult.table.conflicts.map((c, i) => (
+                                            <li key={i}>
+                                                <span className="font-bold">{c.stateId}</span> on symbol <span className="font-mono bg-background px-1 rounded">{c.symbol}</span>: {c.msg}
+                                            </li>
+                                        ))}
+                                    </ul>
+                                </CardContent>
+                            </Card>
+                        )
+                    }
 
-                </div>
-            )}
-
-        </div>
+                </div >
+            )
+            }
+        </div >
     );
 }
 
